@@ -13,3 +13,10 @@
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
+append
+append.go
+append_test.go
+copy
+copy.go
+copy_test.go
+sft

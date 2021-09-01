@@ -11,12 +11,16 @@ formatting string, and it will emit Go source code that formats
 
 ```Bash
 $ sft -m -o formatTime.go -f formatTime '%F %T'
+$ go run formatTime.go
+$ less formatTime.go
 ```
 
 The resultant code can be copied and pasted into another Go source
-file, or the program can simply be compiled into another project. The
+file, or the file can simply be compiled into another project. The
 name of the function it creates and the name of the package it uses
-can be changed on the command line.
+can be changed on the command line. Removing the `-m` command line
+skips creating a `main` function, and outputs a single function with
+the specified function and package name.
 
 The program could also be invoked from a Go generate statement in
 other Go source code.
@@ -34,17 +38,18 @@ It is a bit faster than the Go standard library time formatting
 functionality.
 
 ```Bash
-$ make bench
+$ karrick@promethium sft % make clean bench
+rm -f append copy sft append.go copy.go append_test.go copy_test.go
 go build -o sft main.go
-./sft -f appendTime -append -o append_test.go 'RFC3339Nano'
-./sft -f copyTime -o copy_test.go 'RFC3339Nano'
+./sft -extra -f appendTime -append -o append_test.go RFC3339Nano
+./sft -extra -f copyTime -o copy_test.go RFC3339Nano
 go test -bench=. -benchmem main_test.go append_test.go copy_test.go
 goos: darwin
 goarch: amd64
 cpu: Intel(R) Core(TM) i9-9980HK CPU @ 2.40GHz
-BenchmarkAppendTime-16         	19300489	        56.71 ns/op	       0 B/op	       0 allocs/op
-BenchmarkCopyTime-16           	20237118	        55.34 ns/op	       0 B/op	       0 allocs/op
-BenchmarkStandardLibrary-16    	 5564101	       213.5 ns/op	      32 B/op	       1 allocs/op
+BenchmarkAppendTime-16         	19457082	        55.87 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCopyTime-16           	21264758	        54.54 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStandardLibrary-16    	 5772063	       203.4 ns/op	      32 B/op	       1 allocs/op
 PASS
-ok  	command-line-arguments	3.834s
+ok  	command-line-arguments	3.764s
 ```
