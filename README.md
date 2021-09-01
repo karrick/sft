@@ -10,7 +10,7 @@ formatting string, and it will emit Go source code that formats
 `time.Time` values according to the specified formatting string.
 
 ```Bash
-$ sft -f writeTime -p main -o writeTime.go '%F %T'
+$ sft -m -o formatTime.go -f formatTime '%F %T'
 ```
 
 The resultant code can be copied and pasted into another Go source
@@ -22,7 +22,7 @@ The program could also be invoked from a Go generate statement in
 other Go source code.
 
 ```Go
-//go:generate sft -f writeTime -o writeTime.go '%F %T'
+//go:generate sft -f formatTime -o formatTime.go '%F %T'
 ```
 
 Then when the time format spec changes, simply type `go generate` at
