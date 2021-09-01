@@ -5,6 +5,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"go/format"
+	"go/parser"
+	"go/token"
 	"io"
 	"os"
 	"path/filepath"
@@ -47,6 +50,18 @@ func main() {
 		bail(err)
 	}
 
+	bb := new(bytes.Buffer)
+
+	// TODO: rename to WriteTo?
+	if err = cg.Emit(bb); err != nil {
+		bail(err)
+	}
+
+	buf, err := parse(bb.String())
+	if err != nil {
+		bail(err)
+	}
+
 	var iow io.Writer = os.Stdout
 	var fh *os.File
 
@@ -58,8 +73,7 @@ func main() {
 		iow = fh
 	}
 
-	// TODO: rename to WriteTo?
-	if err = cg.Emit(iow); err != nil {
+	if _, err := fmt.Fprintf(iow, "%s", string(buf)); err != nil {
 		bail(err)
 	}
 
@@ -73,6 +87,19 @@ func main() {
 func bail(err error) {
 	fmt.Fprintf(os.Stderr, "%s: %s\n", filepath.Base(os.Args[0]), err)
 	os.Exit(1)
+}
+
+func parse(source string) ([]byte, error) {
+	fs := token.NewFileSet()
+	f, err := parser.ParseFile(fs, "", source, parser.AllErrors)
+	if err != nil {
+		return nil, err
+	}
+	bb := new(bytes.Buffer)
+	if err := format.Node(bb, fs, f); err != nil {
+		return nil, err
+	}
+	return bb.Bytes(), nil
 }
 
 var formatMap map[string]string

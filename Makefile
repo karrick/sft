@@ -12,11 +12,9 @@ bench: main_test.go append_test.go copy_test.go
 
 append_test.go: sft
 	./sft -extra -f appendTime -append -o $@ $(BENCH_FORMAT)
-	gofmt -w $@
 
 copy_test.go: sft
 	./sft -extra -f copyTime -o $@ $(BENCH_FORMAT)
-	gofmt -w $@
 
 clean:
 	rm -f append copy sft append.go copy.go append_test.go copy_test.go
@@ -40,13 +38,11 @@ append: append.go
 
 append.go: sft
 	./sft -m -extra -f appendTime -append -o $@ $(HYPERFINE_FORMAT)
-	gofmt -w $@
 
 copy: copy.go
 	go build -o $@ $^
 
 copy.go: sft
 	./sft -m -extra -f copyTime -o $@ $(HYPERFINE_FORMAT)
-	gofmt -w $@
 
 .PHONY: build bench clean copytest gotest hyperfine test
