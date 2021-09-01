@@ -10,12 +10,15 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
 func main() {
 	optAppend := flag.Bool("append", false, "use append")
+	optExtra := flag.Bool("extra", false, "allow non-standard formatting verbs")
 	optFuncname := flag.String("f", "appendTime", "name of append function")
+	optMain := flag.Bool("m", false, "emit a main function")
 	optOutput := flag.String("o", "", "name of file to output")
 	optPackage := flag.String("p", "main", "name of package to use")
 	flag.Parse()
@@ -25,14 +28,22 @@ func main() {
 		os.Exit(2)
 	}
 
-	cg, err := NewCodeGenerator(*optPackage, *optFuncname)
-	if err != nil {
-		bail(err)
+	extra := *optExtra
+	spec := flag.Arg(0)
+
+	if a, ok := formatMap[spec]; ok {
+		spec = a
+		extra = true
 	}
 
-	cg.useAppend = *optAppend
-
-	if err = cg.Parse(flag.Arg(0)); err != nil {
+	cg, err := NewCodeGenerator(spec, &Config{
+		Package:    *optPackage,
+		FuncName:   *optFuncname,
+		AllowExtra: extra,
+		UseAppend:  *optAppend,
+		EmitMain:   *optMain,
+	})
+	if err != nil {
 		bail(err)
 	}
 
@@ -47,6 +58,7 @@ func main() {
 		iow = fh
 	}
 
+	// TODO: rename to WriteTo?
 	if err = cg.Emit(iow); err != nil {
 		bail(err)
 	}
@@ -63,11 +75,57 @@ func bail(err error) {
 	os.Exit(1)
 }
 
+var formatMap map[string]string
+
+func init() {
+	formatMap = map[string]string{
+		time.ANSIC:       "%c",
+		time.UnixDate:    "%a %b %e %T %Z %Y",  // "Mon Jan _2 15:04:05 MST 2006",
+		time.RubyDate:    "%a %b %d %T %z %Y",  // "Mon Jan 02 15:04:05 -0700 2006",
+		time.RFC822:      "%d %b %y %R %Z",     // "02 Jan 06 15:04 MST",
+		time.RFC822Z:     "%d %b %y %R %z",     // "02 Jan 06 15:04 -0700",
+		time.RFC850:      "%A, %d-%b-%y %T %Z", // "Monday, 02-Jan-06 15:04:05 MST",
+		time.RFC1123:     "%a, %d %b %Y %T %Z", // "Mon, 02 Jan 2006 15:04:05 MST",
+		time.RFC1123Z:    "%a, %d %b %Y %T %z", // "Mon, 02 Jan 2006 15:04:05 -0700",
+		time.RFC3339:     "%Y-%m-%dT%T%1",      // "2006-01-02T15:04:05Z07:00", // TODO: %1 not standard
+		time.RFC3339Nano: "%Y-%m-%dT%T.%N%1",   // "2006-01-02T15:04:05.999999999Z07:00", // TODO: %1 not standard
+		time.Kitchen:     "%2:%M%p",            // "3:04PM", // TODO: %2 not standard
+		time.Stamp:       "%b %e %T",           // "Jan _2 15:04:05"
+		time.StampMilli:  "%b %e %T.%3",        // "Jan _2 15:04:05.000" // TODO: %3 not standard
+		time.StampMicro:  "%b %e %T.%4",        // "Jan _2 15:04:05.000000" // TODO: %4 not standard
+		time.StampNano:   "%b %e %T.%N",        // "Jan _2 15:04:05.000000000"
+
+		"ANSIC":       "%c",
+		"UnixDate":    "%a %b %e %T %Z %Y",  // "Mon Jan _2 15:04:05 MST 2006",
+		"RubyDate":    "%a %b %d %T %z %Y",  // "Mon Jan 02 15:04:05 -0700 2006",
+		"RFC822":      "%d %b %y %R %Z",     // "02 Jan 06 15:04 MST",
+		"RFC822Z":     "%d %b %y %R %z",     // "02 Jan 06 15:04 -0700",
+		"RFC850":      "%A, %d-%b-%y %T %Z", // "Monday, 02-Jan-06 15:04:05 MST",
+		"RFC1123":     "%a, %d %b %Y %T %Z", // "Mon, 02 Jan 2006 15:04:05 MST",
+		"RFC1123Z":    "%a, %d %b %Y %T %z", // "Mon, 02 Jan 2006 15:04:05 -0700",
+		"RFC3339":     "%Y-%m-%dT%T%1",      // "2006-01-02T15:04:05Z07:00", // TODO: %1 not standard
+		"RFC3339Nano": "%Y-%m-%dT%T.%N%1",   // "2006-01-02T15:04:05.999999999Z07:00", // TODO: %1 not standard
+		"Kitchen":     "%2:%M%p",            // "3:04PM", // TODO: %2 not standard
+		"Stamp":       "%b %e %T",           // "Jan _2 15:04:05"
+		"StampMilli":  "%b %e %T.%3",        // "Jan _2 15:04:05.000" // TODO: %3 not standard
+		"StampMicro":  "%b %e %T.%4",        // "Jan _2 15:04:05.000000" // TODO: %4 not standard
+		"StampNano":   "%b %e %T.%N",        // "Jan _2 15:04:05.000000000"
+	}
+}
+
 type returnValues struct {
 	values []string
 }
 
-type codeGenerator struct {
+type Config struct {
+	Package    string
+	FuncName   string
+	AllowExtra bool
+	EmitMain   bool
+	UseAppend  bool
+}
+
+type CodeGenerator struct {
 	libraries      map[string]struct{}
 	valuesFromInit map[string]*returnValues
 	initFromSymbol map[string]string
@@ -76,198 +134,52 @@ type codeGenerator struct {
 	blobs []string
 	buf   []byte // TODO use this rather than blobs
 
-	packageName                   string
-	functionName                  string
-	gensymCounter                 int
-	offset                        int // While >= 0, use this for offset; when -1 use runtime offset
-	maxLength                     int
-	isDigit, isWeekdays, isMonths bool
-	isU, isW, isMC, isM           bool
-	useAppend                     bool
+	spec                            string
+	packageName                     string
+	functionName                    string
+	gensymCounter                   int
+	offset                          int // While >= 0, use this for offset; when -1 use runtime offset
+	maxLength                       int
+	isDigit, isWeekdays, isMonths   bool
+	isU, isW, isMC, isM             bool
+	allowExtra, emitMain, useAppend bool
 }
 
-func NewCodeGenerator(packageName, functionName string) (*codeGenerator, error) {
-	cg := &codeGenerator{
+func NewCodeGenerator(spec string, config *Config) (*CodeGenerator, error) {
+	if spec == "" {
+		return nil, errors.New("cannot create code generator without time format spec")
+	}
+	if config == nil {
+		config = &Config{}
+	}
+	if config.Package == "" {
+		config.Package = "main"
+	}
+	if config.FuncName == "" {
+		config.FuncName = "formatTime"
+	}
+	cg := &CodeGenerator{
 		valuesFromInit: make(map[string]*returnValues),
 		initFromSymbol: make(map[string]string),
 		libraries:      make(map[string]struct{}),
-		packageName:    packageName,
-		functionName:   functionName,
+		spec:           spec,
+		packageName:    config.Package,
+		functionName:   config.FuncName,
+		allowExtra:     config.AllowExtra,
+		emitMain:       config.EmitMain,
+		useAppend:      config.UseAppend,
+	}
+	if err := cg.parse(); err != nil {
+		return nil, err
 	}
 	return cg, nil
 }
 
-func (cg *codeGenerator) Emit(iow io.Writer) error {
-	var buf bytes.Buffer
-	_, err := buf.WriteString(fmt.Sprintf("package %s\n\n", cg.packageName))
-	if err != nil {
-		return err
-	}
-
-	//
-	// Library imports
-	//
-	// if !cg.useAppend {
-	// cg.libraries["os"] = struct{}{} // for main
-	// }
-	cg.libraries["fmt"] = struct{}{}  // for main
-	cg.libraries["time"] = struct{}{} // for main
-
-	sortedLibraries := make([]string, 0, len(cg.libraries))
-	for p := range cg.libraries {
-		sortedLibraries = append(sortedLibraries, p)
-	}
-	sort.Strings(sortedLibraries)
-
-	if _, err := buf.WriteString("import (\n"); err != nil {
-		return err
-	}
-
-	for _, p := range sortedLibraries {
-		if _, err = buf.WriteString(fmt.Sprintf("    \"%s\"\n", p)); err != nil {
-			return err
-		}
-	}
-
-	if _, err = buf.WriteString(")\n"); err != nil {
-		return err
-	}
-
-	//
-	// Main and specified function prefix
-	//
-	stub := fmt.Sprintf(`
-func init() {
-    when := time.Date(2006, time.January, 2, 3, 4, 5, 123456789, time.UTC)
-    // fmt.Println(string(%s(nil, when)))
-    fmt.Println(string(%s(make([]byte, 128), when)))
-}
-
-func %s(buf []byte, t time.Time) []byte {
-    // situational constant initializations
-`, cg.functionName, cg.functionName, cg.functionName)
-
-	if cg.isM {
-		stub += "    const ampm = \"ampm\"\n"
-		stub += "    var ampmIndex = []int{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2}\n"
-	}
-	if cg.isMC {
-		stub += "    const ampmc = \"AMPM\"\n"
-		if !cg.isM {
-			stub += "    var ampmIndex = []int{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2}\n"
-		}
-	}
-	if cg.isDigit {
-		stub += "    const digits = \"0123456789 123456789\"\n"
-		stub += "    var quotient, remainder int\n"
-	}
-	if cg.isWeekdays {
-		stub += "    const weekdaysLong = \"SundayMondayTuesdayWednesdayThursdayFridaySaturday\"\n"
-		stub += "    var weekdaysLongIndices = []int{0, 6, 12, 19, 28, 36, 42, 50}\n"
-	}
-	if cg.isMonths {
-		stub += "    const monthsLong = \"JanuaryFebruaryMarchAprilMayJuneJulyAugustSeptemberOctoberNovemberDecember\"\n"
-		stub += "    var monthsLongIndices = []int{0, 7, 15, 20, 25, 28, 32, 36, 42, 51, 58, 66, 74}\n"
-	}
-	if cg.isU {
-		stub += "    var uFromWeekday = []string{\"7\", \"1\", \"2\", \"3\", \"4\", \"5\", \"6\"}\n"
-	}
-	if cg.isW {
-		stub += "    var wFromWeekday = []string{\"0\", \"1\", \"2\", \"3\", \"4\", \"5\", \"6\"}\n"
-	}
-
-	if cg.useAppend {
-		stub += fmt.Sprintf(`    if len(buf) > 0 {
-        // fmt.Fprintf(os.Stderr, "append: len: %%d; cap: %%d\n", len(buf), cap(buf))
-        buf = buf[:0]
-    }
-`)
-	} else {
-		stub += fmt.Sprintf(`    if len(buf) <= %d {
-        // fmt.Fprintf(os.Stderr, "write: len: %%d; cap: %%d\n", len(buf), cap(buf))
-        buf = make([]byte, %d)
-    }
-`, cg.maxLength, cg.maxLength)
-	}
-
-	stub += "    // dynamically generated variable initializations\n"
-
-	if _, err = buf.WriteString(stub); err != nil {
-		return err
-	}
-
-	completedInits := make(map[string]struct{})
-	for _, symbol := range cg.orderedSymbols {
-		init, ok := cg.initFromSymbol[symbol]
-		if !ok {
-			return fmt.Errorf("cannot find initialization for %q", symbol)
-		}
-
-		if _, ok := completedInits[init]; ok {
-			continue // this init and its symbols already written
-		}
-		completedInits[init] = struct{}{}
-
-		values, ok := cg.valuesFromInit[init]
-		if !ok {
-			return fmt.Errorf("cannot find values for %q, for %q", init, symbol)
-		}
-		foo := fmt.Sprintf("    %s := %s\n", strings.Join(values.values, ", "), init)
-		if _, err = buf.WriteString(foo); err != nil {
-			return err
-		}
-	}
-
-	for _, blob := range cg.blobs {
-		if _, err = buf.WriteString(blob); err != nil {
-			return err
-		}
-	}
-
-	if false {
-		if _, err = buf.WriteString("    fmt.Fprintf(os.Stderr, \"TEST: buf len: %d; cap: %d\\n\", len(buf), cap(buf))\n"); err != nil {
-			return err
-		}
-	}
-	if !cg.useAppend {
-		if false {
-			if _, err = buf.WriteString("    fmt.Fprintf(os.Stderr, \"TEST: triming to offset: %d\\n\", offset)\n"); err != nil {
-				return err
-			}
-		}
-		if cg.offset >= 0 {
-			if _, err = buf.WriteString(fmt.Sprintf("    buf = buf[:%d]\n", cg.offset)); err != nil {
-				return err
-			}
-		} else {
-			if _, err = buf.WriteString("    buf = buf[:offset]\n"); err != nil {
-				return err
-			}
-		}
-		if false {
-			if _, err = buf.WriteString("    fmt.Fprintf(os.Stderr, \"TEST: buf len: %d; cap: %d\\n\", len(buf), cap(buf))\n"); err != nil {
-				return err
-			}
-		}
-	}
-	if false {
-		if _, err = buf.WriteString("    fmt.Fprintf(os.Stderr, \"TEST: ---- BEGIN ----\\n%q\\nTEST: ---- END ----\\n\", buf)\n"); err != nil {
-			return err
-		}
-	}
-	if _, err = buf.WriteString("\n    return buf\n}\n"); err != nil {
-		return err
-	}
-
-	_, err = iow.Write(buf.Bytes())
-	return err
-}
-
-func (cg *codeGenerator) Parse(format string) error {
+func (cg *CodeGenerator) parse() error {
 	var buf []byte
 	var foundPercent bool
 
-	for ri, rune := range format {
+	for ri, rune := range cg.spec {
 		if !foundPercent {
 			if rune == '%' {
 				foundPercent = true
@@ -362,12 +274,24 @@ func (cg *codeGenerator) Parse(format string) error {
 		case '+':
 			cg.blobs = append(cg.blobs, cg.writePlus())
 		case '1':
+			if !cg.allowExtra {
+				return fmt.Errorf("cannot recognize format verb %q at index %d", rune, ri)
+			}
 			cg.blobs = append(cg.blobs, cg.writeTZ())
 		case '2':
+			if !cg.allowExtra {
+				return fmt.Errorf("cannot recognize format verb %q at index %d", rune, ri)
+			}
 			cg.blobs = append(cg.blobs, cg.writeLMin())
 		case '3':
+			if !cg.allowExtra {
+				return fmt.Errorf("cannot recognize format verb %q at index %d", rune, ri)
+			}
 			cg.blobs = append(cg.blobs, cg.writeMilli())
 		case '4':
+			if !cg.allowExtra {
+				return fmt.Errorf("cannot recognize format verb %q at index %d", rune, ri)
+			}
 			cg.blobs = append(cg.blobs, cg.writeMicro())
 		default:
 			return fmt.Errorf("cannot recognize format verb %q at index %d", rune, ri)
@@ -381,9 +305,171 @@ func (cg *codeGenerator) Parse(format string) error {
 	if len(buf) > 0 {
 		cg.blobs = append(cg.blobs, cg.writeStringConstant(string(buf)))
 	}
-	debug("max length: %d\n", cg.maxLength)
 
 	return nil
+}
+
+func (cg *CodeGenerator) Emit(iow io.Writer) error {
+	var buf bytes.Buffer
+
+	args := make([]string, len(os.Args))
+	for i, a := range os.Args {
+		if i < len(args)-1 {
+			args[i] = a
+		} else {
+			args[i] = "\"" + a + "\""
+		}
+	}
+
+	_, err := buf.WriteString(fmt.Sprintf("// This file was auto generated using the following command:\n//    %s\n\npackage %s\n\n", strings.Join(args, " "), cg.packageName))
+	if err != nil {
+		return err
+	}
+
+	//
+	// Library imports
+	//
+
+	if cg.emitMain {
+		cg.libraries["fmt"] = struct{}{} // for main
+	}
+	// if !cg.useAppend {
+	//     cg.libraries["os"] = struct{}{} // for main
+	// }
+	cg.libraries["time"] = struct{}{} // for main
+
+	sortedLibraries := make([]string, 0, len(cg.libraries))
+	for p := range cg.libraries {
+		sortedLibraries = append(sortedLibraries, p)
+	}
+	sort.Strings(sortedLibraries)
+
+	if _, err := buf.WriteString("import (\n"); err != nil {
+		return err
+	}
+
+	for _, p := range sortedLibraries {
+		if _, err = buf.WriteString(fmt.Sprintf("    \"%s\"\n", p)); err != nil {
+			return err
+		}
+	}
+
+	if _, err = buf.WriteString(")\n"); err != nil {
+		return err
+	}
+
+	//
+	// Main and specified function prefix
+	//
+	var stub string
+
+	if cg.emitMain {
+		cg.libraries["fmt"] = struct{}{} // for main
+		stub = fmt.Sprintf(`
+func main() {
+    when := time.Date(2006, time.January, 2, 3, 4, 5, 123456789, time.UTC)
+    fmt.Println(string(%s(make([]byte, 128), when)))
+}
+`, cg.functionName)
+	}
+
+	stub += fmt.Sprintf(`
+func %s(buf []byte, t time.Time) []byte {
+    // situational constant initializations
+`, cg.functionName)
+
+	if cg.isM {
+		stub += "    const ampm = \"ampm\"\n"
+		stub += "    var ampmIndex = []int{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2}\n"
+	}
+	if cg.isMC {
+		stub += "    const ampmc = \"AMPM\"\n"
+		if !cg.isM {
+			stub += "    var ampmIndex = []int{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2}\n"
+		}
+	}
+	if cg.isDigit {
+		stub += "    const digits = \"0123456789 123456789\"\n"
+		stub += "    var quotient, remainder int\n"
+	}
+	if cg.isWeekdays {
+		stub += "    const weekdaysLong = \"SundayMondayTuesdayWednesdayThursdayFridaySaturday\"\n"
+		stub += "    var weekdaysLongIndices = []int{0, 6, 12, 19, 28, 36, 42, 50}\n"
+	}
+	if cg.isMonths {
+		stub += "    const monthsLong = \"JanuaryFebruaryMarchAprilMayJuneJulyAugustSeptemberOctoberNovemberDecember\"\n"
+		stub += "    var monthsLongIndices = []int{0, 7, 15, 20, 25, 28, 32, 36, 42, 51, 58, 66, 74}\n"
+	}
+	if cg.isU {
+		stub += "    var uFromWeekday = []string{\"7\", \"1\", \"2\", \"3\", \"4\", \"5\", \"6\"}\n"
+	}
+	if cg.isW {
+		stub += "    var wFromWeekday = []string{\"0\", \"1\", \"2\", \"3\", \"4\", \"5\", \"6\"}\n"
+	}
+
+	if cg.useAppend {
+		stub += fmt.Sprintf(`    if len(buf) > 0 {
+        buf = buf[:0]
+    }
+`)
+	} else {
+		stub += fmt.Sprintf(`    if len(buf) <= %d {
+        buf = make([]byte, %d)
+    }
+`, cg.maxLength, cg.maxLength)
+	}
+
+	stub += "    // dynamically generated variable initializations\n"
+
+	if _, err = buf.WriteString(stub); err != nil {
+		return err
+	}
+
+	completedInits := make(map[string]struct{})
+	for _, symbol := range cg.orderedSymbols {
+		init, ok := cg.initFromSymbol[symbol]
+		if !ok {
+			return fmt.Errorf("cannot find initialization for %q", symbol)
+		}
+
+		if _, ok := completedInits[init]; ok {
+			continue // this init and its symbols already written
+		}
+		completedInits[init] = struct{}{}
+
+		values, ok := cg.valuesFromInit[init]
+		if !ok {
+			return fmt.Errorf("cannot find values for %q, for %q", init, symbol)
+		}
+		foo := fmt.Sprintf("    %s := %s\n", strings.Join(values.values, ", "), init)
+		if _, err = buf.WriteString(foo); err != nil {
+			return err
+		}
+	}
+
+	for _, blob := range cg.blobs {
+		if _, err = buf.WriteString(blob); err != nil {
+			return err
+		}
+	}
+
+	if !cg.useAppend {
+		if cg.offset >= 0 {
+			if _, err = buf.WriteString(fmt.Sprintf("    buf = buf[:%d]\n", cg.offset)); err != nil {
+				return err
+			}
+		} else {
+			if _, err = buf.WriteString("    buf = buf[:offset]\n"); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err = buf.WriteString("\n    return buf\n}\n"); err != nil {
+		return err
+	}
+
+	_, err = iow.Write(buf.Bytes())
+	return err
 }
 
 func appendRune(buf *[]byte, r rune) {
@@ -397,7 +483,7 @@ func appendRune(buf *[]byte, r rune) {
 	*buf = (*buf)[:olen+n]                       // trim buf to actual size used by rune addition
 }
 
-func (cg *codeGenerator) gensym(x, y int, format string, a ...interface{}) string {
+func (cg *CodeGenerator) gensym(x, y int, format string, a ...interface{}) string {
 	x-- // convert x from 1..y to 0..(y-1)
 	var symbol string
 
@@ -432,7 +518,7 @@ func (cg *codeGenerator) gensym(x, y int, format string, a ...interface{}) strin
 	return symbol
 }
 
-func (cg *codeGenerator) symbol() string {
+func (cg *CodeGenerator) symbol() string {
 	// Meant to be called by gensym method, but could be called from
 	// elsewhere.
 	symbol := fmt.Sprintf("gs%d", cg.gensymCounter)
@@ -441,7 +527,7 @@ func (cg *codeGenerator) symbol() string {
 	return symbol
 }
 
-func (cg *codeGenerator) write2DigitsMin(value string) string {
+func (cg *CodeGenerator) write2DigitsMin(value string) string {
 	cg.isDigit = true
 	cg.maxLength += 2
 
@@ -474,7 +560,7 @@ func (cg *codeGenerator) write2DigitsMin(value string) string {
 `, value, value)
 }
 
-func (cg *codeGenerator) write2DigitsSpace(value string) string {
+func (cg *CodeGenerator) write2DigitsSpace(value string) string {
 	cg.isDigit = true
 	cg.maxLength += 2
 
@@ -506,7 +592,7 @@ func (cg *codeGenerator) write2DigitsSpace(value string) string {
 `, value, value)
 }
 
-func (cg *codeGenerator) write2DigitsZero(value string) string {
+func (cg *CodeGenerator) write2DigitsZero(value string) string {
 	cg.isDigit = true
 	cg.maxLength += 2
 
@@ -538,7 +624,7 @@ func (cg *codeGenerator) write2DigitsZero(value string) string {
 `, value, value)
 }
 
-func (cg *codeGenerator) write3DigitsZero(value string) string {
+func (cg *CodeGenerator) write3DigitsZero(value string) string {
 	cg.isDigit = true
 	cg.maxLength += 3
 
@@ -588,7 +674,7 @@ func (cg *codeGenerator) write3DigitsZero(value string) string {
 `, value, value)
 }
 
-func (cg *codeGenerator) write4DigitsZero(value string) string {
+func (cg *CodeGenerator) write4DigitsZero(value string) string {
 	cg.isDigit = true
 	cg.maxLength += 4
 
@@ -650,7 +736,7 @@ func (cg *codeGenerator) write4DigitsZero(value string) string {
 `, value, value)
 }
 
-func (cg *codeGenerator) write6DigitsZero(value string) string {
+func (cg *CodeGenerator) write6DigitsZero(value string) string {
 	cg.isDigit = true
 	cg.maxLength += 6
 
@@ -736,7 +822,7 @@ func (cg *codeGenerator) write6DigitsZero(value string) string {
 `, value, value)
 }
 
-func (cg *codeGenerator) write9DigitsZero(value string) string {
+func (cg *CodeGenerator) write9DigitsZero(value string) string {
 	cg.isDigit = true
 	cg.maxLength += 9
 
@@ -862,7 +948,7 @@ func (cg *codeGenerator) write9DigitsZero(value string) string {
 `, value, value)
 }
 
-func (cg *codeGenerator) writeWeekdayShort() string {
+func (cg *CodeGenerator) writeWeekdayShort() string {
 	cg.isWeekdays = true
 	cg.maxLength += 3
 
@@ -892,7 +978,7 @@ func (cg *codeGenerator) writeWeekdayShort() string {
 `, indexL, indexR)
 }
 
-func (cg *codeGenerator) writeWeekdayLong() string {
+func (cg *CodeGenerator) writeWeekdayLong() string {
 	cg.isWeekdays = true
 	cg.maxLength += 9 // Wednesday
 
@@ -920,7 +1006,7 @@ func (cg *codeGenerator) writeWeekdayLong() string {
 `, wdli1, wdli2)
 }
 
-func (cg *codeGenerator) writeMonthShort() string {
+func (cg *CodeGenerator) writeMonthShort() string {
 	cg.isMonths = true
 	cg.maxLength += 3
 
@@ -952,7 +1038,7 @@ func (cg *codeGenerator) writeMonthShort() string {
 
 }
 
-func (cg *codeGenerator) writeMonthLong() string {
+func (cg *CodeGenerator) writeMonthLong() string {
 	cg.isMonths = true
 	cg.maxLength += 9 // september
 
@@ -980,7 +1066,7 @@ func (cg *codeGenerator) writeMonthLong() string {
 `, indexL, indexR)
 }
 
-func (cg *codeGenerator) writeStringConstant(someString string) string {
+func (cg *CodeGenerator) writeStringConstant(someString string) string {
 	ls := len(someString)
 	if ls == 0 {
 		return ""
@@ -992,6 +1078,10 @@ func (cg *codeGenerator) writeStringConstant(someString string) string {
 	}
 
 	if cg.offset >= 0 {
+		// According to Go standard library, runtime.memmove optimizes
+		// transfers of byte slices less than 2K characters. This does
+		// not check the size of the string constants, because it is
+		// unrealistic that they are going to be longer than 2 KiB.
 		foo := "    // writeStringConstant codegen offset\n"
 		for i := 0; i < ls; i++ {
 			foo += fmt.Sprintf("    buf[%d] = %q\n", cg.offset, someString[i])
@@ -1003,7 +1093,7 @@ func (cg *codeGenerator) writeStringConstant(someString string) string {
 	return fmt.Sprintf("    offset += copy(buf[offset:], %q) // writeStringConstant runtime offset\n", someString)
 }
 
-func (cg *codeGenerator) writeStringValue(someValue string) string {
+func (cg *CodeGenerator) writeStringValue(someValue string) string {
 	if cg.useAppend {
 		return fmt.Sprintf("    buf = append(buf, %s...) // writeStringValue\n", someValue)
 	}
@@ -1015,7 +1105,7 @@ func (cg *codeGenerator) writeStringValue(someValue string) string {
 	return off + fmt.Sprintf("    offset += copy(buf[offset:], %s) // writeStringValue runtime offset\n", someValue)
 }
 
-func (cg *codeGenerator) writeC() string {
+func (cg *CodeGenerator) writeC() string {
 	foo := "\n    // writeC\n"
 	foo += cg.writeWeekdayShort()
 	foo += cg.writeStringConstant(" ")
@@ -1029,18 +1119,18 @@ func (cg *codeGenerator) writeC() string {
 	return foo
 }
 
-func (cg *codeGenerator) writeCC() string {
+func (cg *CodeGenerator) writeCC() string {
 	year := cg.gensym(1, 3, "t.Date()")
 	century := cg.gensym(1, 1, "%s / 100", year)
 	return "\n    // writeCC\n" + cg.write2DigitsZero(century)
 }
 
-func (cg *codeGenerator) writeD() string {
+func (cg *CodeGenerator) writeD() string {
 	date := cg.gensym(3, 3, "t.Date()")
 	return "\n    // writeD\n" + cg.write2DigitsZero(date)
 }
 
-func (cg *codeGenerator) writeDC() string {
+func (cg *CodeGenerator) writeDC() string {
 	foo := "\n    // writeDC\n"
 	foo += cg.write2DigitsZero(cg.gensym(1, 1, "int(%s)", cg.gensym(2, 3, "t.Date()")))
 	foo += cg.writeStringConstant("/")
@@ -1050,12 +1140,12 @@ func (cg *codeGenerator) writeDC() string {
 	return foo
 }
 
-func (cg *codeGenerator) writeE() string {
+func (cg *CodeGenerator) writeE() string {
 	date := cg.gensym(3, 3, "t.Date()")
 	return "\n    // writeE\n" + cg.write2DigitsSpace(date)
 }
 
-func (cg *codeGenerator) writeFC() string {
+func (cg *CodeGenerator) writeFC() string {
 	year := cg.gensym(1, 3, "t.Date()")
 	month := cg.gensym(2, 3, "t.Date()")
 	date := cg.gensym(3, 3, "t.Date()")
@@ -1069,83 +1159,83 @@ func (cg *codeGenerator) writeFC() string {
 	return foo
 }
 
-func (cg *codeGenerator) writeG() string {
+func (cg *CodeGenerator) writeG() string {
 	year := cg.gensym(1, 2, "t.ISOWeek()")
 	year2 := cg.gensym(1, 1, "%s %% 100", year)
 	return "\n    // writeG\n" + cg.write2DigitsZero(year2)
 }
 
-func (cg *codeGenerator) writeGC() string {
+func (cg *CodeGenerator) writeGC() string {
 	year := cg.gensym(1, 2, "t.ISOWeek()")
 	return "\n    // writeGC\n" + cg.write4DigitsZero(year)
 }
 
-func (cg *codeGenerator) writeHC() string {
+func (cg *CodeGenerator) writeHC() string {
 	hour := cg.gensym(1, 3, "t.Clock()")
 	return "\n    // writeHC\n" + cg.write2DigitsZero(hour)
 }
 
-func (cg *codeGenerator) writeIC() string {
+func (cg *CodeGenerator) writeIC() string {
 	hour := cg.gensym(1, 3, "t.Clock()")
 	hour12 := cg.gensym(1, 1, "%s %% 12", hour)
 	return "\n    // writeIC\n" + cg.write2DigitsZero(hour12)
 }
 
-func (cg *codeGenerator) writeJ() string {
+func (cg *CodeGenerator) writeJ() string {
 	yearday := cg.gensym(1, 1, "t.YearDay()")
 	return "\n    // writeJ\n" + cg.write3DigitsZero(yearday)
 }
 
-func (cg *codeGenerator) writeK() string {
+func (cg *CodeGenerator) writeK() string {
 	hour := cg.gensym(1, 3, "t.Clock()")
 	return "\n    // writeK\n" + cg.write2DigitsZero(hour)
 }
 
-func (cg *codeGenerator) writeL() string {
+func (cg *CodeGenerator) writeL() string {
 	hour := cg.gensym(1, 3, "t.Clock()")
 	hour12 := cg.gensym(1, 1, "%s %% 12", hour)
 	return "\n    // writeL\n" + cg.write2DigitsSpace(hour12)
 }
 
-func (cg *codeGenerator) writeLMin() string {
+func (cg *CodeGenerator) writeLMin() string {
 	hour := cg.gensym(1, 3, "t.Clock()")
 	hour12 := cg.gensym(1, 1, "%s %% 12", hour)
 	return "\n    // writeLMin\n" + cg.write2DigitsMin(hour12)
 }
 
-func (cg *codeGenerator) writeM() string {
+func (cg *CodeGenerator) writeM() string {
 	month := cg.gensym(2, 3, "t.Date()")
 	monthInt := cg.gensym(1, 1, "int(%s)", month)
 	return "\n    // writeM\n" + cg.write2DigitsZero(monthInt)
 }
 
-func (cg *codeGenerator) writeMC() string {
+func (cg *CodeGenerator) writeMC() string {
 	minute := cg.gensym(2, 3, "t.Clock()")
 	return "\n    // writeMC\n" + cg.write2DigitsZero(minute)
 }
 
-func (cg *codeGenerator) writeN() string {
+func (cg *CodeGenerator) writeN() string {
 	return "\n    // writeN\n" + cg.writeStringConstant("\n")
 }
 
-func (cg *codeGenerator) writeNC() string {
+func (cg *CodeGenerator) writeNC() string {
 	nanos := cg.gensym(1, 1, "t.Nanosecond()")
 	return "\n    // writeNC\n" + cg.write9DigitsZero(nanos)
 }
 
-func (cg *codeGenerator) writeMicro() string {
+func (cg *CodeGenerator) writeMicro() string {
 	nanos := cg.gensym(1, 1, "t.Nanosecond()")
 	micros := cg.gensym(1, 1, "%s / 1000", nanos)
 	return "\n    // writeMicro\n" + cg.write6DigitsZero(micros)
 }
 
-func (cg *codeGenerator) writeMilli() string {
+func (cg *CodeGenerator) writeMilli() string {
 	nanos := cg.gensym(1, 1, "t.Nanosecond()")
 	millis := cg.gensym(1, 1, "%s / 1000000", nanos)
 	return "\n    // writeMillis\n" + cg.write3DigitsZero(millis)
 }
 
-func (cg *codeGenerator) writeP() string {
+func (cg *CodeGenerator) writeP() string {
 	cg.isMC = true
 	cg.maxLength += 2
 
@@ -1175,7 +1265,7 @@ func (cg *codeGenerator) writeP() string {
 `, hourIndex, hourIndex2)
 }
 
-func (cg *codeGenerator) writePC() string {
+func (cg *CodeGenerator) writePC() string {
 	cg.isM = true
 	cg.maxLength += 2
 
@@ -1205,7 +1295,7 @@ func (cg *codeGenerator) writePC() string {
 `, hourIndex, hourIndex2)
 }
 
-func (cg *codeGenerator) writeR() string {
+func (cg *CodeGenerator) writeR() string {
 	hour := cg.gensym(1, 3, "t.Clock()")
 	minute := cg.gensym(2, 3, "t.Clock()")
 	second := cg.gensym(3, 3, "t.Clock()")
@@ -1222,7 +1312,7 @@ func (cg *codeGenerator) writeR() string {
 	return foo
 }
 
-func (cg *codeGenerator) writeRC() string {
+func (cg *CodeGenerator) writeRC() string {
 	hour := cg.gensym(1, 3, "t.Clock()")
 	minute := cg.gensym(2, 3, "t.Clock()")
 	foo := "\n    // writeRC\n"
@@ -1232,7 +1322,7 @@ func (cg *codeGenerator) writeRC() string {
 	return foo
 }
 
-func (cg *codeGenerator) writeS() string {
+func (cg *CodeGenerator) writeS() string {
 	cg.libraries["strconv"] = struct{}{}
 	cg.maxLength += 10
 
@@ -1242,16 +1332,16 @@ func (cg *codeGenerator) writeS() string {
 	return "\n    // writeS\n" + cg.writeStringValue(epochS)
 }
 
-func (cg *codeGenerator) writeSC() string {
+func (cg *CodeGenerator) writeSC() string {
 	second := cg.gensym(3, 3, "t.Clock()")
 	return "\n    // writeSC\n" + cg.write2DigitsZero(second)
 }
 
-func (cg *codeGenerator) writeT() string {
+func (cg *CodeGenerator) writeT() string {
 	return "\n    // writeT\n" + cg.writeStringConstant("\t")
 }
 
-func (cg *codeGenerator) writeTC() string {
+func (cg *CodeGenerator) writeTC() string {
 	hour := cg.gensym(1, 3, "t.Clock()")
 	minute := cg.gensym(2, 3, "t.Clock()")
 	second := cg.gensym(3, 3, "t.Clock()")
@@ -1264,7 +1354,7 @@ func (cg *codeGenerator) writeTC() string {
 	return foo
 }
 
-func (cg *codeGenerator) writeU() string {
+func (cg *CodeGenerator) writeU() string {
 	cg.isU = true
 	cg.maxLength++
 
@@ -1274,7 +1364,7 @@ func (cg *codeGenerator) writeU() string {
 	return cg.writeStringValue(u)
 }
 
-func (cg *codeGenerator) writeW() string {
+func (cg *CodeGenerator) writeW() string {
 	cg.isW = true
 	cg.maxLength++
 
@@ -1284,18 +1374,18 @@ func (cg *codeGenerator) writeW() string {
 	return cg.writeStringValue(w)
 }
 
-func (cg *codeGenerator) writeY() string {
+func (cg *CodeGenerator) writeY() string {
 	year := cg.gensym(1, 3, "t.Date()")
 	year2 := cg.gensym(1, 1, "%s %% 100", year)
 	return "\n    // writeY\n" + cg.write2DigitsZero(year2)
 }
 
-func (cg *codeGenerator) writeYC() string {
+func (cg *CodeGenerator) writeYC() string {
 	year := cg.gensym(1, 3, "t.Date()")
 	return "\n    // writeYC\n" + cg.write4DigitsZero(year)
 }
 
-func (cg *codeGenerator) writeZ() string {
+func (cg *CodeGenerator) writeZ() string {
 	cg.maxLength++    // account for the sign
 	cg.maxLength -= 4 // we only write 4 digits, even though we write code to handle digits
 
@@ -1351,13 +1441,13 @@ func (cg *codeGenerator) writeZ() string {
 		cg.write2DigitsZero(zoneHourNegative), cg.write2DigitsZero(zoneMinuteNegative))
 }
 
-func (cg *codeGenerator) writeZC() string {
+func (cg *CodeGenerator) writeZC() string {
 	cg.maxLength += 3 // ??? can zone name be longer than 3 bytes
 	zoneName := cg.gensym(1, 2, "t.Zone()")
 	return cg.writeStringValue(zoneName)
 }
 
-func (cg *codeGenerator) writeTZ() string {
+func (cg *CodeGenerator) writeTZ() string {
 	cg.maxLength += 2 // account for sign and colon
 	cg.maxLength -= 4 // we only write 4 digits, even though we write code to handle digits
 
@@ -1426,11 +1516,11 @@ func (cg *codeGenerator) writeTZ() string {
 		cg.write2DigitsZero(zoneHourNegative), cg.write2DigitsZero(zoneMinuteNegative))
 }
 
-func (cg *codeGenerator) writePercent() string {
+func (cg *CodeGenerator) writePercent() string {
 	return cg.writeStringConstant("%")
 }
 
-func (cg *codeGenerator) writePlus() string {
+func (cg *CodeGenerator) writePlus() string {
 	foo := "\n    // writePlus\n"
 	foo += cg.writeWeekdayShort()
 	foo += cg.writeStringConstant(" ")
