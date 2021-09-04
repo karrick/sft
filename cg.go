@@ -229,10 +229,11 @@ func (cg *CodeGenerator) scan() error {
 //
 // cg.bb -> buf -> cg.buf
 func (cg *CodeGenerator) prepare() error {
+
 	buf := make([]byte, 0, 1024+cg.bb.Len())
 	var err error
 
-	appendString(&buf, "// This file was auto generated using the following command:\n//    %s\n\npackage %s\n\n", cg.cmd, cg.packageName)
+	appendString(&buf, "package %s\n\n", cg.packageName)
 
 	//
 	// Library imports
@@ -354,11 +355,18 @@ func %s(buf []byte, t time.Time) []byte {
 	}
 	appendString(&buf, "    return buf\n}\n")
 
-	// fmt.Fprintf(os.Stderr, "BEGIN:\n%s\nEND\n", buf)
-	cg.buf, err = gofmt(buf)
+	// Because gofmt removes comments, we need to run gofmt first, then append
+	// the result to after the header.
+	buf, err = gofmt(buf)
 	if err != nil {
 		bail(err)
 	}
+	header := make([]byte, 0, 100+len(buf))
+	appendString(&header, `// This file was auto generated using the following command:
+//    %s
+
+`, cg.cmd)
+	cg.buf = append(header, buf...)
 
 	return nil
 }
