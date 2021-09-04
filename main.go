@@ -12,12 +12,12 @@ import (
 
 func main() {
 	optAppend := flag.Bool("append", false, "use append")
+	optDebug := flag.Bool("debug", false, "elide reformatting using gofmt")
 	optExtra := flag.Bool("extra", false, "allow non-standard formatting verbs")
 	optFuncname := flag.String("f", "appendTime", "name of append function")
 	optMain := flag.Bool("m", false, "emit a main function")
 	optOutput := flag.String("o", "", "name of file to output")
 	optPackage := flag.String("p", "main", "name of package to use")
-	optReformat := flag.Bool("reformat", false, "reformat like gofmt")
 	flag.Parse()
 
 	if flag.NArg() != 1 {
@@ -41,15 +41,19 @@ func main() {
 			args[i] = "\"" + a + "\""
 		}
 	}
-	cmd := strings.Join(args, " ")
+	header := fmt.Sprintf(`// This file was auto generated using the following command:
+//    %s
 
-	cg, err := NewCodeGenerator(spec, cmd, &Config{
+`, strings.Join(args, " "))
+
+	cg, err := NewCodeGenerator(spec, &Config{
 		Package:    *optPackage,
 		FuncName:   *optFuncname,
+		Header:     header,
 		AllowExtra: extra,
 		UseAppend:  *optAppend,
 		EmitMain:   *optMain,
-		Reformat:   *optReformat,
+		Reformat:   !*optDebug,
 	})
 	if err != nil {
 		bail(err)

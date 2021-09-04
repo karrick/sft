@@ -16,6 +16,7 @@ import (
 type Config struct {
 	Package    string
 	FuncName   string
+	Header     string
 	AllowExtra bool
 	EmitMain   bool
 	Reformat   bool
@@ -32,14 +33,14 @@ type CodeGenerator struct {
 	initFromSymbol map[string]string
 	orderedSymbols []string
 
-	// operations stores all of the formatting operations needed to be performed
-	// in the order in which they are required to run. We have to build this out
-	// of band with emitting the final output because before we have to identify
+	// buf stores all of the formatting operations needed to be performed in the
+	// order in which they are required to run. We have to build this out of
+	// band with emitting the final output because before we have to identify
 	// which imports to include at the top of the output before we emit these
 	// formatting operations.
 	buf []byte
 
-	cmd                             string
+	header                          string
 	spec                            string
 	packageName                     string
 	functionName                    string
@@ -52,7 +53,7 @@ type CodeGenerator struct {
 	allowExtra, emitMain, useAppend bool
 }
 
-func NewCodeGenerator(spec, cmd string, config *Config) (*CodeGenerator, error) {
+func NewCodeGenerator(spec string, config *Config) (*CodeGenerator, error) {
 	var err error
 
 	if spec == "" {
@@ -72,9 +73,9 @@ func NewCodeGenerator(spec, cmd string, config *Config) (*CodeGenerator, error) 
 		initFromSymbol: make(map[string]string),
 		libraries:      make(map[string]struct{}),
 		spec:           spec,
-		cmd:            cmd,
 		packageName:    config.Package,
 		functionName:   config.FuncName,
+		header:         config.Header,
 		allowExtra:     config.AllowExtra,
 		emitMain:       config.EmitMain,
 		useAppend:      config.UseAppend,
@@ -96,8 +97,7 @@ func NewCodeGenerator(spec, cmd string, config *Config) (*CodeGenerator, error) 
 
 // Scan the spec string and build the output for the required operations.
 func (cg *CodeGenerator) scan() ([]byte, error) {
-	buf := make([]byte, 0, 65536)
-
+	dest := make([]byte, 0, 32768)
 	var stringConstant []byte
 	var foundPercent bool
 
@@ -106,7 +106,7 @@ func (cg *CodeGenerator) scan() ([]byte, error) {
 			if rune == '%' {
 				foundPercent = true
 				if len(stringConstant) > 0 {
-					buf = append(buf, cg.writeStringConstant(string(stringConstant))...)
+					dest = append(dest, cg.writeStringConstant(string(stringConstant))...)
 					stringConstant = stringConstant[:0]
 				}
 			} else {
@@ -116,105 +116,105 @@ func (cg *CodeGenerator) scan() ([]byte, error) {
 		}
 		switch rune {
 		case 'a':
-			buf = append(buf, cg.writeWeekdayShort()...)
+			dest = append(dest, cg.writeWeekdayShort()...)
 		case 'A':
-			buf = append(buf, cg.writeWeekdayLong()...)
+			dest = append(dest, cg.writeWeekdayLong()...)
 		case 'b':
-			buf = append(buf, cg.writeMonthShort()...)
+			dest = append(dest, cg.writeMonthShort()...)
 		case 'B':
-			buf = append(buf, cg.writeMonthLong()...)
+			dest = append(dest, cg.writeMonthLong()...)
 		case 'c':
-			buf = append(buf, cg.writeC()...)
+			dest = append(dest, cg.writeC()...)
 		case 'C':
-			buf = append(buf, cg.writeCC()...)
+			dest = append(dest, cg.writeCC()...)
 		case 'd':
-			buf = append(buf, cg.writeD()...)
+			dest = append(dest, cg.writeD()...)
 		case 'D':
-			buf = append(buf, cg.writeDC()...)
+			dest = append(dest, cg.writeDC()...)
 		case 'e':
-			buf = append(buf, cg.writeE()...)
+			dest = append(dest, cg.writeE()...)
 		case 'F':
-			buf = append(buf, cg.writeFC()...)
+			dest = append(dest, cg.writeFC()...)
 		case 'g':
-			buf = append(buf, cg.writeG()...)
+			dest = append(dest, cg.writeG()...)
 		case 'G':
-			buf = append(buf, cg.writeGC()...)
+			dest = append(dest, cg.writeGC()...)
 		case 'h':
-			buf = append(buf, cg.writeMonthShort()...)
+			dest = append(dest, cg.writeMonthShort()...)
 		case 'H':
-			buf = append(buf, cg.writeHC()...)
+			dest = append(dest, cg.writeHC()...)
 		case 'I':
-			buf = append(buf, cg.writeIC()...)
+			dest = append(dest, cg.writeIC()...)
 		case 'j':
-			buf = append(buf, cg.writeJ()...)
+			dest = append(dest, cg.writeJ()...)
 		case 'k':
-			buf = append(buf, cg.writeK()...)
+			dest = append(dest, cg.writeK()...)
 		case 'l':
-			buf = append(buf, cg.writeL()...)
+			dest = append(dest, cg.writeL()...)
 		case 'm':
-			buf = append(buf, cg.writeM()...)
+			dest = append(dest, cg.writeM()...)
 		case 'M':
-			buf = append(buf, cg.writeMC()...)
+			dest = append(dest, cg.writeMC()...)
 		case 'n':
-			buf = append(buf, cg.writeN()...)
+			dest = append(dest, cg.writeN()...)
 		case 'N':
-			buf = append(buf, cg.writeNC()...)
+			dest = append(dest, cg.writeNC()...)
 		case 'p':
-			buf = append(buf, cg.writeP()...)
+			dest = append(dest, cg.writeP()...)
 		case 'P':
-			buf = append(buf, cg.writePC()...)
+			dest = append(dest, cg.writePC()...)
 		case 'r':
-			buf = append(buf, cg.writeR()...)
+			dest = append(dest, cg.writeR()...)
 		case 'R':
-			buf = append(buf, cg.writeRC()...)
+			dest = append(dest, cg.writeRC()...)
 		case 's':
-			buf = append(buf, cg.writeS()...)
+			dest = append(dest, cg.writeS()...)
 		case 'S':
-			buf = append(buf, cg.writeSC()...)
+			dest = append(dest, cg.writeSC()...)
 		case 't':
-			buf = append(buf, cg.writeT()...)
+			dest = append(dest, cg.writeT()...)
 		case 'T':
-			buf = append(buf, cg.writeTC()...)
+			dest = append(dest, cg.writeTC()...)
 		case 'u':
-			buf = append(buf, cg.writeU()...)
+			dest = append(dest, cg.writeU()...)
 		case 'w':
-			buf = append(buf, cg.writeW()...)
+			dest = append(dest, cg.writeW()...)
 		case 'x':
-			buf = append(buf, cg.writeDC()...)
+			dest = append(dest, cg.writeDC()...)
 		case 'X':
-			buf = append(buf, cg.writeTC()...)
+			dest = append(dest, cg.writeTC()...)
 		case 'y':
-			buf = append(buf, cg.writeY()...)
+			dest = append(dest, cg.writeY()...)
 		case 'Y':
-			buf = append(buf, cg.writeYC()...)
+			dest = append(dest, cg.writeYC()...)
 		case 'z':
-			buf = append(buf, cg.writeZ()...)
+			dest = append(dest, cg.writeZ()...)
 		case 'Z':
-			buf = append(buf, cg.writeZC()...)
+			dest = append(dest, cg.writeZC()...)
 		case '%':
-			buf = append(buf, cg.writePercent()...)
+			dest = append(dest, cg.writePercent()...)
 		case '+':
-			buf = append(buf, cg.writePlus()...)
+			dest = append(dest, cg.writePlus()...)
 		case '1':
 			if !cg.allowExtra {
 				return nil, fmt.Errorf("cannot recognize format verb %q at index %d", rune, ri)
 			}
-			buf = append(buf, cg.writeTZ()...)
+			dest = append(dest, cg.writeTZ()...)
 		case '2':
 			if !cg.allowExtra {
 				return nil, fmt.Errorf("cannot recognize format verb %q at index %d", rune, ri)
 			}
-			buf = append(buf, cg.writeLMin()...)
+			dest = append(dest, cg.writeLMin()...)
 		case '3':
 			if !cg.allowExtra {
 				return nil, fmt.Errorf("cannot recognize format verb %q at index %d", rune, ri)
 			}
-			buf = append(buf, cg.writeMilli()...)
+			dest = append(dest, cg.writeMilli()...)
 		case '4':
 			if !cg.allowExtra {
 				return nil, fmt.Errorf("cannot recognize format verb %q at index %d", rune, ri)
 			}
-			buf = append(buf, cg.writeMicro()...)
+			dest = append(dest, cg.writeMicro()...)
 		default:
 			return nil, fmt.Errorf("cannot recognize format verb %q at index %d", rune, ri)
 		}
@@ -225,20 +225,20 @@ func (cg *CodeGenerator) scan() ([]byte, error) {
 		return nil, errors.New("cannot find closing format verb")
 	}
 	if len(stringConstant) > 0 {
-		buf = append(buf, cg.writeStringConstant(string(stringConstant))...)
+		dest = append(dest, cg.writeStringConstant(string(stringConstant))...)
 	}
 
-	return buf, nil
+	return dest, nil
 }
 
 // prepare final output
 //
-// sbuf -> buf -> cg.buf
-func (cg *CodeGenerator) prepare(sbuf []byte) error {
-	buf := make([]byte, 0, 1024+len(sbuf))
+// source -> dest -> cg.buf
+func (cg *CodeGenerator) prepare(source []byte) error {
+	dest := make([]byte, 0, len(cg.header)+4096+len(source))
 	var err error
 
-	appendString(&buf, "package %s\n\n", cg.packageName)
+	appendString(&dest, "package %s\n\n", cg.packageName)
 
 	//
 	// Library imports
@@ -254,17 +254,17 @@ func (cg *CodeGenerator) prepare(sbuf []byte) error {
 	}
 	sort.Strings(sortedLibraries)
 
-	appendString(&buf, "import (\n")
+	appendString(&dest, "import (\n")
 	for _, p := range sortedLibraries {
-		appendString(&buf, "    \"%s\"\n", p)
+		appendString(&dest, "    \"%s\"\n", p)
 	}
-	appendString(&buf, ")\n\n")
+	appendString(&dest, ")\n\n")
 
 	//
 	// Main and specified function prefix
 	//
 	if cg.emitMain {
-		appendString(&buf, `func main() {
+		appendString(&dest, `func main() {
     when := time.Date(2006, time.January, 2, 3, 4, 5, 123456789, time.UTC)
     fmt.Println(string(%s(make([]byte, 128), when)))
 }
@@ -272,47 +272,47 @@ func (cg *CodeGenerator) prepare(sbuf []byte) error {
 `, cg.functionName)
 	}
 
-	appendString(&buf, "func %s(buf []byte, t time.Time) []byte {\n", cg.functionName)
+	appendString(&dest, "func %s(buf []byte, t time.Time) []byte {\n", cg.functionName)
 
 	if cg.isM {
-		appendString(&buf, "    const ampm = \"ampm\"\n")
-		appendString(&buf, "    var ampmIndex = []int{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2}\n")
+		appendString(&dest, "    const ampm = \"ampm\"\n")
+		appendString(&dest, "    var ampmIndex = []int{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2}\n")
 	}
 	if cg.isMC {
-		appendString(&buf, "    const ampmc = \"AMPM\"\n")
+		appendString(&dest, "    const ampmc = \"AMPM\"\n")
 		if !cg.isM {
-			appendString(&buf, "    var ampmIndex = []int{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2}\n")
+			appendString(&dest, "    var ampmIndex = []int{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2}\n")
 		}
 	}
 	if cg.isDigit {
-		appendString(&buf, "    const digits = \"0123456789 123456789\"\n")
-		appendString(&buf, "    var quotient, remainder int\n")
+		appendString(&dest, "    const digits = \"0123456789 123456789\"\n")
+		appendString(&dest, "    var quotient, remainder int\n")
 	}
 	if cg.isWeekdays {
-		appendString(&buf, "    const weekdaysLong = \"SundayMondayTuesdayWednesdayThursdayFridaySaturday\"\n")
-		appendString(&buf, "    var weekdaysLongIndices = []int{0, 6, 12, 19, 28, 36, 42, 50}\n")
+		appendString(&dest, "    const weekdaysLong = \"SundayMondayTuesdayWednesdayThursdayFridaySaturday\"\n")
+		appendString(&dest, "    var weekdaysLongIndices = []int{0, 6, 12, 19, 28, 36, 42, 50}\n")
 	}
 	if cg.isMonths {
-		appendString(&buf, "    const monthsLong = \"JanuaryFebruaryMarchAprilMayJuneJulyAugustSeptemberOctoberNovemberDecember\"\n")
-		appendString(&buf, "    var monthsLongIndices = []int{0, 7, 15, 20, 25, 28, 32, 36, 42, 51, 58, 66, 74}\n")
+		appendString(&dest, "    const monthsLong = \"JanuaryFebruaryMarchAprilMayJuneJulyAugustSeptemberOctoberNovemberDecember\"\n")
+		appendString(&dest, "    var monthsLongIndices = []int{0, 7, 15, 20, 25, 28, 32, 36, 42, 51, 58, 66, 74}\n")
 	}
 	if cg.isU {
-		appendString(&buf, "    var uFromWeekday = []string{\"7\", \"1\", \"2\", \"3\", \"4\", \"5\", \"6\"}\n")
+		appendString(&dest, "    var uFromWeekday = []string{\"7\", \"1\", \"2\", \"3\", \"4\", \"5\", \"6\"}\n")
 	}
 	if cg.isW {
-		appendString(&buf, "    var wFromWeekday = []string{\"0\", \"1\", \"2\", \"3\", \"4\", \"5\", \"6\"}\n")
+		appendString(&dest, "    var wFromWeekday = []string{\"0\", \"1\", \"2\", \"3\", \"4\", \"5\", \"6\"}\n")
 	}
 
 	if cg.useAppend {
 		// TODO: Upgrade so that function appends to existing byte slice.
-		appendString(&buf, `
+		appendString(&dest, `
     if len(buf) > 0 {
         buf = buf[:0]
     }
 
 `)
 	} else {
-		appendString(&buf, `
+		appendString(&dest, `
     if len(buf) < %d {
         buf = make([]byte, %d)
     }
@@ -337,60 +337,43 @@ func (cg *CodeGenerator) prepare(sbuf []byte) error {
 		if !ok {
 			return fmt.Errorf("cannot find values for %q, for %q", init, symbol)
 		}
-		appendString(&buf, "    %s := %s\n", strings.Join(values.values, ", "), init)
+		appendString(&dest, "    %s := %s\n", strings.Join(values.values, ", "), init)
 	}
-	appendString(&buf, "\n")
+	appendString(&dest, "\n")
 
 	// Emit all of the operations in their required sequence.
-	buf = append(buf, sbuf...) // bb.Bytes()...)
+	dest = append(dest, source...)
 
 	if !cg.useAppend {
 		if cg.offset >= 0 {
 			// Scanner was able to track offset because everything was fixed
 			// width output.
-			appendString(&buf, "\n    buf = buf[:%d]\n", cg.offset)
+			appendString(&dest, "\n    buf = buf[:%d]\n", cg.offset)
 		} else {
 			// Because one or more formatting verbs were not fixed width output,
 			// scanner was not able to track offset at runtime, and had to emit
 			// code to track it at runtime.
-			appendString(&buf, "\n    buf = buf[:offset]\n")
+			appendString(&dest, "\n    buf = buf[:offset]\n")
 		}
 	}
-	appendString(&buf, "    return buf\n}\n")
+	appendString(&dest, "    return buf\n}\n")
 
 	// Because gofmt removes comments, we need to run gofmt first, then append
 	// the result to after the header.
 	if cg.reformat {
-		buf, err = gofmt(buf)
+		dest, err = gofmt(dest)
 		if err != nil {
 			bail(err)
 		}
 	}
-	header := make([]byte, 0, 100+len(buf))
-	appendString(&header, `// This file was auto generated using the following command:
-//    %s
-
-`, cg.cmd)
-	cg.buf = append(header, buf...)
+	if lh := len(cg.header); lh > 0 {
+		header := make([]byte, 0, lh+len(dest))
+		header = append(header, cg.header...)
+		dest = append(header, dest...)
+	}
+	cg.buf = dest
 
 	return nil
-}
-
-func appendString(buf *[]byte, f string, a ...interface{}) {
-	*buf = append(*buf, fmt.Sprintf(f, a...)...)
-}
-
-func gofmt(source []byte) ([]byte, error) {
-	fs := token.NewFileSet()
-	f, err := parser.ParseFile(fs, "", string(source), parser.AllErrors)
-	if err != nil {
-		return nil, err
-	}
-	bb := new(bytes.Buffer)
-	if err := format.Node(bb, fs, f); err != nil {
-		return nil, err
-	}
-	return bb.Bytes(), nil
 }
 
 func (cg *CodeGenerator) Bytes() []byte {
@@ -404,17 +387,6 @@ func (cg *CodeGenerator) String() string {
 func (cg *CodeGenerator) WriteTo(iow io.Writer) (int64, error) {
 	n, err := iow.Write(cg.buf)
 	return int64(n), err
-}
-
-func appendRune(buf *[]byte, r rune) {
-	if r < utf8.RuneSelf {
-		*buf = append(*buf, byte(r))
-		return
-	}
-	olen := len(*buf)
-	*buf = append(*buf, 0, 0, 0, 0)              // grow buf large enough to accommodate largest possible UTF8 sequence
-	n := utf8.EncodeRune((*buf)[olen:olen+4], r) // encode rune into newly allocated buf space
-	*buf = (*buf)[:olen+n]                       // trim buf to actual size used by rune addition
 }
 
 func (cg *CodeGenerator) gensym(x, y int, format string, a ...interface{}) string {
@@ -1470,4 +1442,32 @@ func (cg *CodeGenerator) writePlus() string {
 	foo += cg.writeStringConstant(" ")
 	foo += cg.writeYC()
 	return foo
+}
+
+func appendString(buf *[]byte, f string, a ...interface{}) {
+	*buf = append(*buf, fmt.Sprintf(f, a...)...)
+}
+
+func appendRune(buf *[]byte, r rune) {
+	if r < utf8.RuneSelf {
+		*buf = append(*buf, byte(r))
+		return
+	}
+	olen := len(*buf)
+	*buf = append(*buf, 0, 0, 0, 0)              // grow buf large enough to accommodate largest possible UTF8 sequence
+	n := utf8.EncodeRune((*buf)[olen:olen+4], r) // encode rune into newly allocated buf space
+	*buf = (*buf)[:olen+n]                       // trim buf to actual size used by rune addition
+}
+
+func gofmt(source []byte) ([]byte, error) {
+	fs := token.NewFileSet()
+	f, err := parser.ParseFile(fs, "", string(source), parser.AllErrors)
+	if err != nil {
+		return nil, err
+	}
+	bb := new(bytes.Buffer)
+	if err := format.Node(bb, fs, f); err != nil {
+		return nil, err
+	}
+	return bb.Bytes(), nil
 }
