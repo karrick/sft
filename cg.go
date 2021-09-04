@@ -81,12 +81,13 @@ func NewCodeGenerator(spec, cmd string, config *Config) (*CodeGenerator, error) 
 		reformat:       config.Reformat,
 	}
 
-	bb, err := cg.scan()
+	buf, err := cg.scan()
 	if err != nil {
 		return nil, err
 	}
+	// fmt.Fprintf(os.Stderr, "BEGIN:\n%s\nEND\n", buf)
 
-	if err = cg.prepare(bb); err != nil {
+	if err = cg.prepare(buf); err != nil {
 		return nil, err
 	}
 
@@ -94,8 +95,9 @@ func NewCodeGenerator(spec, cmd string, config *Config) (*CodeGenerator, error) 
 }
 
 // Scan the spec string and build the output for the required operations.
-func (cg *CodeGenerator) scan() (*bytes.Buffer, error) {
-	bb := new(bytes.Buffer)
+func (cg *CodeGenerator) scan() ([]byte, error) {
+	buf := make([]byte, 0, 65536)
+
 	var stringConstant []byte
 	var foundPercent bool
 
@@ -104,7 +106,7 @@ func (cg *CodeGenerator) scan() (*bytes.Buffer, error) {
 			if rune == '%' {
 				foundPercent = true
 				if len(stringConstant) > 0 {
-					bb.WriteString(cg.writeStringConstant(string(stringConstant)))
+					buf = append(buf, cg.writeStringConstant(string(stringConstant))...)
 					stringConstant = stringConstant[:0]
 				}
 			} else {
@@ -114,105 +116,105 @@ func (cg *CodeGenerator) scan() (*bytes.Buffer, error) {
 		}
 		switch rune {
 		case 'a':
-			bb.WriteString(cg.writeWeekdayShort())
+			buf = append(buf, cg.writeWeekdayShort()...)
 		case 'A':
-			bb.WriteString(cg.writeWeekdayLong())
+			buf = append(buf, cg.writeWeekdayLong()...)
 		case 'b':
-			bb.WriteString(cg.writeMonthShort())
+			buf = append(buf, cg.writeMonthShort()...)
 		case 'B':
-			bb.WriteString(cg.writeMonthLong())
+			buf = append(buf, cg.writeMonthLong()...)
 		case 'c':
-			bb.WriteString(cg.writeC())
+			buf = append(buf, cg.writeC()...)
 		case 'C':
-			bb.WriteString(cg.writeCC())
+			buf = append(buf, cg.writeCC()...)
 		case 'd':
-			bb.WriteString(cg.writeD())
+			buf = append(buf, cg.writeD()...)
 		case 'D':
-			bb.WriteString(cg.writeDC())
+			buf = append(buf, cg.writeDC()...)
 		case 'e':
-			bb.WriteString(cg.writeE())
+			buf = append(buf, cg.writeE()...)
 		case 'F':
-			bb.WriteString(cg.writeFC())
+			buf = append(buf, cg.writeFC()...)
 		case 'g':
-			bb.WriteString(cg.writeG())
+			buf = append(buf, cg.writeG()...)
 		case 'G':
-			bb.WriteString(cg.writeGC())
+			buf = append(buf, cg.writeGC()...)
 		case 'h':
-			bb.WriteString(cg.writeMonthShort())
+			buf = append(buf, cg.writeMonthShort()...)
 		case 'H':
-			bb.WriteString(cg.writeHC())
+			buf = append(buf, cg.writeHC()...)
 		case 'I':
-			bb.WriteString(cg.writeIC())
+			buf = append(buf, cg.writeIC()...)
 		case 'j':
-			bb.WriteString(cg.writeJ())
+			buf = append(buf, cg.writeJ()...)
 		case 'k':
-			bb.WriteString(cg.writeK())
+			buf = append(buf, cg.writeK()...)
 		case 'l':
-			bb.WriteString(cg.writeL())
+			buf = append(buf, cg.writeL()...)
 		case 'm':
-			bb.WriteString(cg.writeM())
+			buf = append(buf, cg.writeM()...)
 		case 'M':
-			bb.WriteString(cg.writeMC())
+			buf = append(buf, cg.writeMC()...)
 		case 'n':
-			bb.WriteString(cg.writeN())
+			buf = append(buf, cg.writeN()...)
 		case 'N':
-			bb.WriteString(cg.writeNC())
+			buf = append(buf, cg.writeNC()...)
 		case 'p':
-			bb.WriteString(cg.writeP())
+			buf = append(buf, cg.writeP()...)
 		case 'P':
-			bb.WriteString(cg.writePC())
+			buf = append(buf, cg.writePC()...)
 		case 'r':
-			bb.WriteString(cg.writeR())
+			buf = append(buf, cg.writeR()...)
 		case 'R':
-			bb.WriteString(cg.writeRC())
+			buf = append(buf, cg.writeRC()...)
 		case 's':
-			bb.WriteString(cg.writeS())
+			buf = append(buf, cg.writeS()...)
 		case 'S':
-			bb.WriteString(cg.writeSC())
+			buf = append(buf, cg.writeSC()...)
 		case 't':
-			bb.WriteString(cg.writeT())
+			buf = append(buf, cg.writeT()...)
 		case 'T':
-			bb.WriteString(cg.writeTC())
+			buf = append(buf, cg.writeTC()...)
 		case 'u':
-			bb.WriteString(cg.writeU())
+			buf = append(buf, cg.writeU()...)
 		case 'w':
-			bb.WriteString(cg.writeW())
+			buf = append(buf, cg.writeW()...)
 		case 'x':
-			bb.WriteString(cg.writeDC())
+			buf = append(buf, cg.writeDC()...)
 		case 'X':
-			bb.WriteString(cg.writeTC())
+			buf = append(buf, cg.writeTC()...)
 		case 'y':
-			bb.WriteString(cg.writeY())
+			buf = append(buf, cg.writeY()...)
 		case 'Y':
-			bb.WriteString(cg.writeYC())
+			buf = append(buf, cg.writeYC()...)
 		case 'z':
-			bb.WriteString(cg.writeZ())
+			buf = append(buf, cg.writeZ()...)
 		case 'Z':
-			bb.WriteString(cg.writeZC())
+			buf = append(buf, cg.writeZC()...)
 		case '%':
-			bb.WriteString(cg.writePercent())
+			buf = append(buf, cg.writePercent()...)
 		case '+':
-			bb.WriteString(cg.writePlus())
+			buf = append(buf, cg.writePlus()...)
 		case '1':
 			if !cg.allowExtra {
 				return nil, fmt.Errorf("cannot recognize format verb %q at index %d", rune, ri)
 			}
-			bb.WriteString(cg.writeTZ())
+			buf = append(buf, cg.writeTZ()...)
 		case '2':
 			if !cg.allowExtra {
 				return nil, fmt.Errorf("cannot recognize format verb %q at index %d", rune, ri)
 			}
-			bb.WriteString(cg.writeLMin())
+			buf = append(buf, cg.writeLMin()...)
 		case '3':
 			if !cg.allowExtra {
 				return nil, fmt.Errorf("cannot recognize format verb %q at index %d", rune, ri)
 			}
-			bb.WriteString(cg.writeMilli())
+			buf = append(buf, cg.writeMilli()...)
 		case '4':
 			if !cg.allowExtra {
 				return nil, fmt.Errorf("cannot recognize format verb %q at index %d", rune, ri)
 			}
-			bb.WriteString(cg.writeMicro())
+			buf = append(buf, cg.writeMicro()...)
 		default:
 			return nil, fmt.Errorf("cannot recognize format verb %q at index %d", rune, ri)
 		}
@@ -223,17 +225,17 @@ func (cg *CodeGenerator) scan() (*bytes.Buffer, error) {
 		return nil, errors.New("cannot find closing format verb")
 	}
 	if len(stringConstant) > 0 {
-		bb.WriteString(cg.writeStringConstant(string(stringConstant)))
+		buf = append(buf, cg.writeStringConstant(string(stringConstant))...)
 	}
 
-	return bb, nil
+	return buf, nil
 }
 
 // prepare final output
 //
-// bb -> buf -> cg.buf
-func (cg *CodeGenerator) prepare(bb *bytes.Buffer) error {
-	buf := make([]byte, 0, 1024+bb.Len())
+// sbuf -> buf -> cg.buf
+func (cg *CodeGenerator) prepare(sbuf []byte) error {
+	buf := make([]byte, 0, 1024+len(sbuf))
 	var err error
 
 	appendString(&buf, "package %s\n\n", cg.packageName)
@@ -340,7 +342,7 @@ func (cg *CodeGenerator) prepare(bb *bytes.Buffer) error {
 	appendString(&buf, "\n")
 
 	// Emit all of the operations in their required sequence.
-	buf = append(buf, bb.Bytes()...)
+	buf = append(buf, sbuf...) // bb.Bytes()...)
 
 	if !cg.useAppend {
 		if cg.offset >= 0 {
