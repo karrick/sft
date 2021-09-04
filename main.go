@@ -17,6 +17,7 @@ func main() {
 	optMain := flag.Bool("m", false, "emit a main function")
 	optOutput := flag.String("o", "", "name of file to output")
 	optPackage := flag.String("p", "main", "name of package to use")
+	optReformat := flag.Bool("reformat", false, "reformat like gofmt")
 	flag.Parse()
 
 	if flag.NArg() != 1 {
@@ -48,6 +49,7 @@ func main() {
 		AllowExtra: extra,
 		UseAppend:  *optAppend,
 		EmitMain:   *optMain,
+		Reformat:   *optReformat,
 	})
 	if err != nil {
 		bail(err)
