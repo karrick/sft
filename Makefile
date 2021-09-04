@@ -30,7 +30,7 @@ copytest: copy
 gotest: main_test.go append_test.go copy_test.go
 	go test -v $^
 
-sft: main.go
+sft: main.go cg.go
 	go build -o $@ $^
 
 append: append.go
