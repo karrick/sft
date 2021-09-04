@@ -8,7 +8,6 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
-	"os"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -32,9 +31,15 @@ type CodeGenerator struct {
 	initFromSymbol map[string]string
 	orderedSymbols []string
 
-	blobs []string
-	buf   []byte // TODO use this rather than blobs
+	// operations stores all of the formatting operations needed to be performed
+	// in the order in which they are required to run. We have to build this out
+	// of band with emitting the final output because before we have to identify
+	// which imports to include at the top of the output before we emit these
+	// formatting operations.
+	bb  bytes.Buffer
+	buf []byte
 
+	cmd                             string
 	spec                            string
 	packageName                     string
 	functionName                    string
@@ -46,7 +51,9 @@ type CodeGenerator struct {
 	allowExtra, emitMain, useAppend bool
 }
 
-func NewCodeGenerator(spec string, config *Config) (*CodeGenerator, error) {
+func NewCodeGenerator(spec, cmd string, config *Config) (*CodeGenerator, error) {
+	var err error
+
 	if spec == "" {
 		return nil, errors.New("cannot create code generator without time format spec")
 	}
@@ -64,136 +71,144 @@ func NewCodeGenerator(spec string, config *Config) (*CodeGenerator, error) {
 		initFromSymbol: make(map[string]string),
 		libraries:      make(map[string]struct{}),
 		spec:           spec,
+		cmd:            cmd,
 		packageName:    config.Package,
 		functionName:   config.FuncName,
 		allowExtra:     config.AllowExtra,
 		emitMain:       config.EmitMain,
 		useAppend:      config.UseAppend,
 	}
-	if err := cg.scan(); err != nil {
+
+	if err = cg.scan(); err != nil {
 		return nil, err
 	}
+
+	if err = cg.prepare(); err != nil {
+		return nil, err
+	}
+
 	return cg, nil
 }
 
+// Scan the spec string and build the output for the required operations.
 func (cg *CodeGenerator) scan() error {
-	var buf []byte
+	var stringConstant []byte
 	var foundPercent bool
 
 	for ri, rune := range cg.spec {
 		if !foundPercent {
 			if rune == '%' {
 				foundPercent = true
-				if len(buf) > 0 {
-					cg.blobs = append(cg.blobs, cg.writeStringConstant(string(buf)))
-					buf = buf[:0]
+				if len(stringConstant) > 0 {
+					cg.bb.WriteString(cg.writeStringConstant(string(stringConstant)))
+					stringConstant = stringConstant[:0]
 				}
 			} else {
-				appendRune(&buf, rune)
+				appendRune(&stringConstant, rune)
 			}
 			continue
 		}
 		switch rune {
 		case 'a':
-			cg.blobs = append(cg.blobs, cg.writeWeekdayShort())
+			cg.bb.WriteString(cg.writeWeekdayShort())
 		case 'A':
-			cg.blobs = append(cg.blobs, cg.writeWeekdayLong())
+			cg.bb.WriteString(cg.writeWeekdayLong())
 		case 'b':
-			cg.blobs = append(cg.blobs, cg.writeMonthShort())
+			cg.bb.WriteString(cg.writeMonthShort())
 		case 'B':
-			cg.blobs = append(cg.blobs, cg.writeMonthLong())
+			cg.bb.WriteString(cg.writeMonthLong())
 		case 'c':
-			cg.blobs = append(cg.blobs, cg.writeC())
+			cg.bb.WriteString(cg.writeC())
 		case 'C':
-			cg.blobs = append(cg.blobs, cg.writeCC())
+			cg.bb.WriteString(cg.writeCC())
 		case 'd':
-			cg.blobs = append(cg.blobs, cg.writeD())
+			cg.bb.WriteString(cg.writeD())
 		case 'D':
-			cg.blobs = append(cg.blobs, cg.writeDC())
+			cg.bb.WriteString(cg.writeDC())
 		case 'e':
-			cg.blobs = append(cg.blobs, cg.writeE())
+			cg.bb.WriteString(cg.writeE())
 		case 'F':
-			cg.blobs = append(cg.blobs, cg.writeFC())
+			cg.bb.WriteString(cg.writeFC())
 		case 'g':
-			cg.blobs = append(cg.blobs, cg.writeG())
+			cg.bb.WriteString(cg.writeG())
 		case 'G':
-			cg.blobs = append(cg.blobs, cg.writeGC())
+			cg.bb.WriteString(cg.writeGC())
 		case 'h':
-			cg.blobs = append(cg.blobs, cg.writeMonthShort())
+			cg.bb.WriteString(cg.writeMonthShort())
 		case 'H':
-			cg.blobs = append(cg.blobs, cg.writeHC())
+			cg.bb.WriteString(cg.writeHC())
 		case 'I':
-			cg.blobs = append(cg.blobs, cg.writeIC())
+			cg.bb.WriteString(cg.writeIC())
 		case 'j':
-			cg.blobs = append(cg.blobs, cg.writeJ())
+			cg.bb.WriteString(cg.writeJ())
 		case 'k':
-			cg.blobs = append(cg.blobs, cg.writeK())
+			cg.bb.WriteString(cg.writeK())
 		case 'l':
-			cg.blobs = append(cg.blobs, cg.writeL())
+			cg.bb.WriteString(cg.writeL())
 		case 'm':
-			cg.blobs = append(cg.blobs, cg.writeM())
+			cg.bb.WriteString(cg.writeM())
 		case 'M':
-			cg.blobs = append(cg.blobs, cg.writeMC())
+			cg.bb.WriteString(cg.writeMC())
 		case 'n':
-			cg.blobs = append(cg.blobs, cg.writeN())
+			cg.bb.WriteString(cg.writeN())
 		case 'N':
-			cg.blobs = append(cg.blobs, cg.writeNC())
+			cg.bb.WriteString(cg.writeNC())
 		case 'p':
-			cg.blobs = append(cg.blobs, cg.writeP())
+			cg.bb.WriteString(cg.writeP())
 		case 'P':
-			cg.blobs = append(cg.blobs, cg.writePC())
+			cg.bb.WriteString(cg.writePC())
 		case 'r':
-			cg.blobs = append(cg.blobs, cg.writeR())
+			cg.bb.WriteString(cg.writeR())
 		case 'R':
-			cg.blobs = append(cg.blobs, cg.writeRC())
+			cg.bb.WriteString(cg.writeRC())
 		case 's':
-			cg.blobs = append(cg.blobs, cg.writeS())
+			cg.bb.WriteString(cg.writeS())
 		case 'S':
-			cg.blobs = append(cg.blobs, cg.writeSC())
+			cg.bb.WriteString(cg.writeSC())
 		case 't':
-			cg.blobs = append(cg.blobs, cg.writeT())
+			cg.bb.WriteString(cg.writeT())
 		case 'T':
-			cg.blobs = append(cg.blobs, cg.writeTC())
+			cg.bb.WriteString(cg.writeTC())
 		case 'u':
-			cg.blobs = append(cg.blobs, cg.writeU())
+			cg.bb.WriteString(cg.writeU())
 		case 'w':
-			cg.blobs = append(cg.blobs, cg.writeW())
+			cg.bb.WriteString(cg.writeW())
 		case 'x':
-			cg.blobs = append(cg.blobs, cg.writeDC())
+			cg.bb.WriteString(cg.writeDC())
 		case 'X':
-			cg.blobs = append(cg.blobs, cg.writeTC())
+			cg.bb.WriteString(cg.writeTC())
 		case 'y':
-			cg.blobs = append(cg.blobs, cg.writeY())
+			cg.bb.WriteString(cg.writeY())
 		case 'Y':
-			cg.blobs = append(cg.blobs, cg.writeYC())
+			cg.bb.WriteString(cg.writeYC())
 		case 'z':
-			cg.blobs = append(cg.blobs, cg.writeZ())
+			cg.bb.WriteString(cg.writeZ())
 		case 'Z':
-			cg.blobs = append(cg.blobs, cg.writeZC())
+			cg.bb.WriteString(cg.writeZC())
 		case '%':
-			cg.blobs = append(cg.blobs, cg.writePercent())
+			cg.bb.WriteString(cg.writePercent())
 		case '+':
-			cg.blobs = append(cg.blobs, cg.writePlus())
+			cg.bb.WriteString(cg.writePlus())
 		case '1':
 			if !cg.allowExtra {
 				return fmt.Errorf("cannot recognize format verb %q at index %d", rune, ri)
 			}
-			cg.blobs = append(cg.blobs, cg.writeTZ())
+			cg.bb.WriteString(cg.writeTZ())
 		case '2':
 			if !cg.allowExtra {
 				return fmt.Errorf("cannot recognize format verb %q at index %d", rune, ri)
 			}
-			cg.blobs = append(cg.blobs, cg.writeLMin())
+			cg.bb.WriteString(cg.writeLMin())
 		case '3':
 			if !cg.allowExtra {
 				return fmt.Errorf("cannot recognize format verb %q at index %d", rune, ri)
 			}
-			cg.blobs = append(cg.blobs, cg.writeMilli())
+			cg.bb.WriteString(cg.writeMilli())
 		case '4':
 			if !cg.allowExtra {
 				return fmt.Errorf("cannot recognize format verb %q at index %d", rune, ri)
 			}
-			cg.blobs = append(cg.blobs, cg.writeMicro())
+			cg.bb.WriteString(cg.writeMicro())
 		default:
 			return fmt.Errorf("cannot recognize format verb %q at index %d", rune, ri)
 		}
@@ -203,41 +218,28 @@ func (cg *CodeGenerator) scan() error {
 	if foundPercent {
 		return errors.New("cannot find closing format verb")
 	}
-	if len(buf) > 0 {
-		cg.blobs = append(cg.blobs, cg.writeStringConstant(string(buf)))
+	if len(stringConstant) > 0 {
+		cg.bb.WriteString(cg.writeStringConstant(string(stringConstant)))
 	}
 
 	return nil
 }
 
-// TODO: rename to WriteTo?
-func (cg *CodeGenerator) Emit(iow io.Writer) error {
-	var buf bytes.Buffer
+// prepare final output
+//
+// cg.bb -> buf -> cg.buf
+func (cg *CodeGenerator) prepare() error {
+	buf := make([]byte, 0, 1024+cg.bb.Len())
+	var err error
 
-	args := make([]string, len(os.Args))
-	for i, a := range os.Args {
-		if i < len(args)-1 {
-			args[i] = a
-		} else {
-			args[i] = "\"" + a + "\""
-		}
-	}
-
-	_, err := buf.WriteString(fmt.Sprintf("// This file was auto generated using the following command:\n//    %s\n\npackage %s\n\n", strings.Join(args, " "), cg.packageName))
-	if err != nil {
-		return err
-	}
+	appendString(&buf, "// This file was auto generated using the following command:\n//    %s\n\npackage %s\n\n", cg.cmd, cg.packageName)
 
 	//
 	// Library imports
 	//
-
 	if cg.emitMain {
 		cg.libraries["fmt"] = struct{}{} // for main
 	}
-	// if !cg.useAppend {
-	//     cg.libraries["os"] = struct{}{} // for main
-	// }
 	cg.libraries["time"] = struct{}{} // for main
 
 	sortedLibraries := make([]string, 0, len(cg.libraries))
@@ -246,87 +248,75 @@ func (cg *CodeGenerator) Emit(iow io.Writer) error {
 	}
 	sort.Strings(sortedLibraries)
 
-	if _, err := buf.WriteString("import (\n"); err != nil {
-		return err
-	}
-
+	appendString(&buf, "import (\n")
 	for _, p := range sortedLibraries {
-		if _, err = buf.WriteString(fmt.Sprintf("    \"%s\"\n", p)); err != nil {
-			return err
-		}
+		appendString(&buf, "    \"%s\"\n", p)
 	}
-
-	if _, err = buf.WriteString(")\n"); err != nil {
-		return err
-	}
+	appendString(&buf, ")\n\n")
 
 	//
 	// Main and specified function prefix
 	//
-	var stub string
-
 	if cg.emitMain {
 		cg.libraries["fmt"] = struct{}{} // for main
-		stub = fmt.Sprintf(`
-func main() {
+		appendString(&buf, `func main() {
     when := time.Date(2006, time.January, 2, 3, 4, 5, 123456789, time.UTC)
     fmt.Println(string(%s(make([]byte, 128), when)))
 }
+
 `, cg.functionName)
 	}
 
-	stub += fmt.Sprintf(`
+	appendString(&buf, `
 func %s(buf []byte, t time.Time) []byte {
-    // situational constant initializations
 `, cg.functionName)
 
 	if cg.isM {
-		stub += "    const ampm = \"ampm\"\n"
-		stub += "    var ampmIndex = []int{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2}\n"
+		appendString(&buf, "    const ampm = \"ampm\"\n")
+		appendString(&buf, "    var ampmIndex = []int{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2}\n")
 	}
 	if cg.isMC {
-		stub += "    const ampmc = \"AMPM\"\n"
+		appendString(&buf, "    const ampmc = \"AMPM\"\n")
 		if !cg.isM {
-			stub += "    var ampmIndex = []int{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2}\n"
+			appendString(&buf, "    var ampmIndex = []int{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2}\n")
 		}
 	}
 	if cg.isDigit {
-		stub += "    const digits = \"0123456789 123456789\"\n"
-		stub += "    var quotient, remainder int\n"
+		appendString(&buf, "    const digits = \"0123456789 123456789\"\n")
+		appendString(&buf, "    var quotient, remainder int\n")
 	}
 	if cg.isWeekdays {
-		stub += "    const weekdaysLong = \"SundayMondayTuesdayWednesdayThursdayFridaySaturday\"\n"
-		stub += "    var weekdaysLongIndices = []int{0, 6, 12, 19, 28, 36, 42, 50}\n"
+		appendString(&buf, "    const weekdaysLong = \"SundayMondayTuesdayWednesdayThursdayFridaySaturday\"\n")
+		appendString(&buf, "    var weekdaysLongIndices = []int{0, 6, 12, 19, 28, 36, 42, 50}\n")
 	}
 	if cg.isMonths {
-		stub += "    const monthsLong = \"JanuaryFebruaryMarchAprilMayJuneJulyAugustSeptemberOctoberNovemberDecember\"\n"
-		stub += "    var monthsLongIndices = []int{0, 7, 15, 20, 25, 28, 32, 36, 42, 51, 58, 66, 74}\n"
+		appendString(&buf, "    const monthsLong = \"JanuaryFebruaryMarchAprilMayJuneJulyAugustSeptemberOctoberNovemberDecember\"\n")
+		appendString(&buf, "    var monthsLongIndices = []int{0, 7, 15, 20, 25, 28, 32, 36, 42, 51, 58, 66, 74}\n")
 	}
 	if cg.isU {
-		stub += "    var uFromWeekday = []string{\"7\", \"1\", \"2\", \"3\", \"4\", \"5\", \"6\"}\n"
+		appendString(&buf, "    var uFromWeekday = []string{\"7\", \"1\", \"2\", \"3\", \"4\", \"5\", \"6\"}\n")
 	}
 	if cg.isW {
-		stub += "    var wFromWeekday = []string{\"0\", \"1\", \"2\", \"3\", \"4\", \"5\", \"6\"}\n"
+		appendString(&buf, "    var wFromWeekday = []string{\"0\", \"1\", \"2\", \"3\", \"4\", \"5\", \"6\"}\n")
 	}
 
 	if cg.useAppend {
-		stub += fmt.Sprintf(`    if len(buf) > 0 {
+		appendString(&buf, `
+    if len(buf) > 0 {
         buf = buf[:0]
     }
+
 `)
 	} else {
-		stub += fmt.Sprintf(`    if len(buf) <= %d {
+		appendString(&buf, `
+    if len(buf) < %d {
         buf = make([]byte, %d)
     }
+
 `, cg.maxLength, cg.maxLength)
 	}
 
-	stub += "    // dynamically generated variable initializations\n"
-
-	if _, err = buf.WriteString(stub); err != nil {
-		return err
-	}
-
+	// dynamically generated variable initializations
 	completedInits := make(map[string]struct{})
 	for _, symbol := range cg.orderedSymbols {
 		init, ok := cg.initFromSymbol[symbol]
@@ -335,7 +325,7 @@ func %s(buf []byte, t time.Time) []byte {
 		}
 
 		if _, ok := completedInits[init]; ok {
-			continue // this init and its symbols already written
+			continue // this init and its symbols have already been written
 		}
 		completedInits[init] = struct{}{}
 
@@ -343,43 +333,41 @@ func %s(buf []byte, t time.Time) []byte {
 		if !ok {
 			return fmt.Errorf("cannot find values for %q, for %q", init, symbol)
 		}
-		foo := fmt.Sprintf("    %s := %s\n", strings.Join(values.values, ", "), init)
-		if _, err = buf.WriteString(foo); err != nil {
-			return err
-		}
+		appendString(&buf, "    %s := %s\n", strings.Join(values.values, ", "), init)
 	}
 
-	for _, blob := range cg.blobs {
-		if _, err = buf.WriteString(blob); err != nil {
-			return err
-		}
-	}
+	// Emit all of the operations in their required sequence.
+	buf = append(buf, cg.bb.Bytes()...)
+	cg.bb.Reset()
 
 	if !cg.useAppend {
 		if cg.offset >= 0 {
-			if _, err = buf.WriteString(fmt.Sprintf("    buf = buf[:%d]\n", cg.offset)); err != nil {
-				return err
-			}
+			// Scanner was able to track offset because everything was fixed
+			// width output.
+			appendString(&buf, "\n    buf = buf[:%d]\n", cg.offset)
 		} else {
-			if _, err = buf.WriteString("    buf = buf[:offset]\n"); err != nil {
-				return err
-			}
+			// Because one or more formatting verbs were not fixed width output,
+			// scanner was not able to track offset at runtime, and had to emit
+			// code to track it at runtime.
+			appendString(&buf, "\n    buf = buf[:offset]\n")
 		}
 	}
-	if _, err = buf.WriteString("\n    return buf\n}\n"); err != nil {
-		return err
-	}
+	appendString(&buf, "    return buf\n}\n")
 
-	buf2, err := format2(buf.Bytes())
+	// fmt.Fprintf(os.Stderr, "BEGIN:\n%s\nEND\n", buf)
+	cg.buf, err = gofmt(buf)
 	if err != nil {
 		bail(err)
 	}
 
-	_, err = iow.Write(buf2)
-	return err
+	return nil
 }
 
-func format2(source []byte) ([]byte, error) {
+func appendString(buf *[]byte, f string, a ...interface{}) {
+	*buf = append(*buf, fmt.Sprintf(f, a...)...)
+}
+
+func gofmt(source []byte) ([]byte, error) {
 	fs := token.NewFileSet()
 	f, err := parser.ParseFile(fs, "", string(source), parser.AllErrors)
 	if err != nil {
@@ -390,6 +378,19 @@ func format2(source []byte) ([]byte, error) {
 		return nil, err
 	}
 	return bb.Bytes(), nil
+}
+
+func (cg *CodeGenerator) Bytes() []byte {
+	return cg.buf
+}
+
+func (cg *CodeGenerator) String() string {
+	return string(cg.buf)
+}
+
+func (cg *CodeGenerator) WriteTo(iow io.Writer) (int64, error) {
+	n, err := iow.Write(cg.buf)
+	return int64(n), err
 }
 
 func appendRune(buf *[]byte, r rune) {

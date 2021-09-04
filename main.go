@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -31,7 +32,17 @@ func main() {
 		extra = true
 	}
 
-	cg, err := NewCodeGenerator(spec, &Config{
+	args := make([]string, len(os.Args))
+	for i, a := range os.Args {
+		if i < len(args)-1 {
+			args[i] = a
+		} else {
+			args[i] = "\"" + a + "\""
+		}
+	}
+	cmd := strings.Join(args, " ")
+
+	cg, err := NewCodeGenerator(spec, cmd, &Config{
 		Package:    *optPackage,
 		FuncName:   *optFuncname,
 		AllowExtra: extra,
@@ -53,7 +64,7 @@ func main() {
 		iow = fh
 	}
 
-	if err = cg.Emit(iow); err != nil {
+	if _, err = cg.WriteTo(iow); err != nil {
 		bail(err)
 	}
 
